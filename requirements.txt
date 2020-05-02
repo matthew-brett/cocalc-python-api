@@ -1,2 +1,3 @@
 # Requirements to run package
 pyyaml
+requests

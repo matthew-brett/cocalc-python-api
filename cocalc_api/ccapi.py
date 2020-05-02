@@ -17,14 +17,14 @@ User configuration should be of form::
         email: matthew.brett@gmail.com
 """
 
-import requests
-from requests.auth import HTTPBasicAuth
 import json
 import pprint
 import re
 import uuid
 from time import sleep
 
+import requests
+from requests.auth import HTTPBasicAuth
 import yaml
 
 # Inspired by https://stackoverflow.com/a/18359032/1939576
