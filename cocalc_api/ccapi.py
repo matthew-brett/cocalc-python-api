@@ -10,11 +10,10 @@ Refs:
 User configuration should be of form::
 
     # My credentials for CoCalc queries, etc.
-    api_user:
-        first_name: Matthew
-        last_name:  Brett
-        api_key:    ab_etcetcetc
-        email: matthew.brett@gmail.com
+    first_name: Matthew
+    last_name:  Brett
+    api_key:    ab_etcetcetc
+    email: matthew.brett@gmail.com
 """
 
 import json
@@ -88,9 +87,7 @@ class CCAPI:
 
             first_name: Jane
             last_name: Doe
-            password: AB45yuZZ))jRw
             api_key: sk_sda89swelekd8x0JJ83lGSwl
-            account_id: c526b5e0-3fa7-11ea-a03a-0050b67e8897
             email: my_email@somehost.org
 
         returns dict of user info settings.
