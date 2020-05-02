@@ -6,23 +6,27 @@ Refs:
 * https://doc.cocalc.com/api/query.html
 * https://share.cocalc.com/share/65f06a34-6690-407d-b95c-f51bbd5ee810/Public/README.md
 * https://github.com/sagemathinc/cocalc/blob/master/src/smc-util/db-schema/db-schema.ts
+
+User configuration should be of form::
+
+    # My credentials for CoCalc queries, etc.
+    api_user:
+        first_name: Matthew
+        last_name:  Brett
+        api_key:    ab_etcetcetc
+        email: matthew.brett@gmail.com
 """
 
-import os.path as op
 import requests
 from requests.auth import HTTPBasicAuth
 import json
-import yaml
 import pprint
 import re
 import uuid
 from time import sleep
 
-import pytest
+import yaml
 
-HERE = op.dirname(__file__)
-USER_DIR = op.join(HERE, '..', '..', '..', 'cocalc-secrets')
-USER_CONFIG = op.join(USER_DIR, 'myuser.yaml')
 # Inspired by https://stackoverflow.com/a/18359032/1939576
 UUID_RE = re.compile('[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z', re.I)
 
@@ -33,11 +37,11 @@ class CocalcError(ValueError):
     """ Error from CoCalc """
 
 
-class NoneFoundError(CocalcError):
+class CCNoneFoundError(CocalcError):
     """ Error when no items found in search """
 
 
-class ManyFoundError(CocalcError):
+class CCManyFoundError(CocalcError):
     """ Error when more than one item found in search """
 
 
@@ -60,30 +64,49 @@ def strip_uuid(in_uuid):
 class CCAPI:
     base_url = 'https://cocalc.com'
 
-    def __init__(self, uinfo=USER_CONFIG, verbose=True):
+    def __init__(self, uinfo, verbose=True):
+        """ Initialize CCAPI object.
+
+        Parameters
+        ----------
+        uuinfo : dict or str
+            Dictionary containing user configuration, or filename with YaML
+            file containing configuration.
+        verbose : {True, False}, optional
+            If True, print verbose messages.
+        """
         if isinstance(uinfo, str):
             uinfo = self.load_user_info(uinfo)
         self.uinfo = uinfo
         self.verbose=verbose
+        self._account_id = None
 
     def load_user_info(self, fname):
-        r"""
-        load user information
+        r"""Load user information
+
         Input file should be of form
 
-            api_user:
-                first_name: Jane
-                last_name: Doe
-                password: AB45yuZZ))jRw
-                api_key: sk_sda89swelekd8x0JJ83lGSwl
-                account_id: c526b5e0-3fa7-11ea-a03a-0050b67e8897
-                email: my_email@somehost.org
+            first_name: Jane
+            last_name: Doe
+            password: AB45yuZZ))jRw
+            api_key: sk_sda89swelekd8x0JJ83lGSwl
+            account_id: c526b5e0-3fa7-11ea-a03a-0050b67e8897
+            email: my_email@somehost.org
 
         returns dict of user info settings.
         """
         with open(fname,"r") as inf:
-            user_info = yaml.load(inf)['api_user']
+            user_info = yaml.load(inf)
         return user_info
+
+    @property
+    def account_id(self):
+        if self._account_id is not None:
+            return self._account_id
+        payload = {"query": {"accounts": {"account_id":None}}}
+        response = self.call_api("query", payload)
+        self._account_id = response['query']['accounts']['account_id']
+        return self._account_id
 
     def call_api(self,
                  msg,
@@ -199,12 +222,12 @@ class CCAPI:
 
         Raises
         ------
-        ManyFoundError
+        CCManyFoundError
             If we found more than one existing project with matching title.
         """
         try:
             project_id = self.as_project_id(title)
-        except NoneFoundError:
+        except CCNoneFoundError:
             pass
         else:
             if self.verbose:
@@ -240,9 +263,9 @@ class CCAPI:
             return in_id
         found = check_func(in_id)
         if not found:
-            raise NoneFoundError(f'No matching {of_type} for {in_id}')
+            raise CCNoneFoundError(f'No matching {of_type} for {in_id}')
         if len(found) > 1:
-            raise ManyFoundError(
+            raise CCManyFoundError(
                 f'More than one matching {of_type} for {in_id}')
         return found[0]
 
@@ -288,13 +311,13 @@ class CCAPI:
                        email=email_body,
                        replyto=replyto,
                        replyto_name=replyto_name)
-        return cc_api.call_api('invite_collaborator', payload)
+        return self.call_api('invite_collaborator', payload)
 
     def get_project_users(self, projectish):
         project_id = self.as_project_id(projectish)
         payload = {"query": {"projects": {"project_id": project_id,
                                           "users": None}}}
-        response = cc_api.call_api('query', payload)
+        response = self.call_api('query', payload)
         collaborators = []
         owner = None
         for user_id, info_d in response['query']['projects']['users'].items():
@@ -352,7 +375,7 @@ class CCAPI:
                    'bash': bash,
                    'err_on_exit': err_on_exit,
                   }
-        response = cc_api.call_api('project_exec', payload)
+        response = self.call_api('project_exec', payload)
         if response['event'] == 'error':
             raise CocalcError(
                 f'{command} failed on {projectish} with response\n{response}')
@@ -363,7 +386,7 @@ class CCAPI:
                    'project_id': self.as_project_id(projectish),
                    'path': path,
                    'content': content}
-        response = cc_api.call_api('write_text_file_to_project', payload)
+        response = self.call_api('write_text_file_to_project', payload)
         if response['event'] == 'error':
             raise CocalcError(
                 f'Write to {path} failed on {projectish} with '
@@ -414,7 +437,7 @@ class CCAPI:
         See: https://doc.cocalc.com/api/query.html#examples-of-set-query
         """
         proj_id = self.as_project_id(projectish)
-        account_id = (self.uinfo['account_id'] if accountish is None
+        account_id = (self.account_id if accountish is None
                       else self.as_account_id(accountish))
         r = self.call_api('query',
                           {'query':
@@ -431,68 +454,3 @@ class CCAPI:
             raise CocalcError(
                 f'Failed upgrade to {projectish} with response\n{r}')
         return r
-
-
-cc_api = CCAPI()
-
-
-def test_call_api():
-    with pytest.raises(CCResponseError):
-        cc_api.call_api('query', {'foo': 1})
-
-
-def test_invite_collaborator():
-    funny_email = 'matthew.brett+cocalc@gmail.com'
-    with pytest.raises(ValueError):
-        cc_api.invite_collaborator('not-a-project', funny_email,
-                                   'subject', 'body')
-    with pytest.raises(ValueError):
-        cc_api.invite_collaborator('project1', 'not-an-email',
-                                   'subject', 'body')
-    result = cc_api.invite_collaborator(
-        funny_email,
-        'project1',
-        'Collaborate on project1',
-        'Testing email invites')
-    assert result['event'] == 'success'
-
-
-def test_projects_by_title():
-    assert cc_api.projects_by_title('not-a-project') == []
-    assert (cc_api.projects_by_title('project1') ==
-            ['0476fa26-8044-4881-9bca-97634857c2f7'])
-
-
-def test_search_users():
-    assert cc_api.search_users('not-a-user') == []
-    ui = cc_api.uinfo
-    assert (cc_api.search_users(ui['email']) ==
-            [ui['account_id']])
-
-
-def test_as_account_id():
-    my_id = cc_api.uinfo['account_id']
-    assert cc_api.as_account_id(my_id) == my_id
-    with pytest.raises(ManyFoundError):
-        cc_api.as_account_id("Matthew Brett")
-    with pytest.raises(NoneFoundError):
-        cc_api.as_account_id("bizarre_email_address@nodomain.baz")
-
-
-def test_as_project_id():
-    p1_id = '0476fa26-8044-4881-9bca-97634857c2f7'
-    assert cc_api.as_project_id(p1_id) == p1_id
-    with pytest.raises(NoneFoundError):
-        cc_api.as_project_id("clearly-not-a-real-project99")
-
-
-def test_get_project_users():
-    owner, collabs = cc_api.get_project_users('project1')
-    assert owner == cc_api.uinfo['account_id']
-    assert set(collabs) == set(
-        [cc_api.as_account_id(n) for n in (
-            '0fe07013-3098-4200-8c2b-0c86f6b65ce2',
-            '3984dc1e-a63a-425e-bc91-9b1732ac58fc',
-            '67809a11-6e3c-4c46-a8eb-8e3086ec4574',  # MV
-            'matthew.brett+cocalc@gmail.com',
-            'm.brett@bham.ac.uk')])
