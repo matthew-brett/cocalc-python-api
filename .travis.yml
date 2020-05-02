@@ -1,0 +1,66 @@
+language: python
+
+cache:
+  directories:
+    - $HOME/.cache/pip
+
+env:
+    global:
+        - DEPENDS="pyyaml"
+        - PKG_NAME=cocalc_api
+
+matrix:
+  include:
+    - python: 3.8
+    - python: 3.7
+      dist: xenial
+    - python: 3.6
+      env:
+        - COVERAGE=1
+        - DOCTESTS=1
+    - python: 3.6
+      env:
+    # Test pre-release versions of everything
+    - python: 3.6
+      env:
+        - EXTRA_PIP_FLAGS="--pre"
+
+before_install:
+    # Update virtualenv etc
+    - pip install -U virtualenv
+    - virtualenv --python=python venv
+    - source venv/bin/activate
+    - python -m pip install --upgrade pip wheel
+    - python --version  # just to check
+    - pip install pytest # always
+    - if [ -n "$DEPENDS" ]; then
+        pip install $EXTRA_PIP_FLAGS $DEPENDS;
+      fi
+    - if [ -n "$COVERAGE" ]; then
+      pip install coverage;
+      pip install codecov;
+      fi
+
+install:
+    - |
+      pip install .
+
+script:
+    - |
+      pip install -r test-requirements.txt
+      # Change into an innocuous directory and find tests from installation
+      mkdir for_testing
+      cd for_testing
+      if [ -n "$COVERAGE" ]; then
+        cp ../.coveragerc .;
+        pip install pytest-cov
+        COVER_ARGS="--cov=$PKG_NAME";
+      fi
+      if [ -n "$DOCTESTS" ]; then
+        DOCTEST_ARGS="--doctest-modules"
+      fi
+      pytest $COVER_ARGS $DOCTEST_ARGS ../$PKG_NAME
+
+
+after_success:
+    - if [ -n "$COVERAGE" ]; then codecov; fi
