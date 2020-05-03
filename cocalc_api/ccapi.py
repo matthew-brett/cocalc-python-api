@@ -9,11 +9,11 @@ Refs:
 
 User configuration should be of form::
 
-    # My credentials for CoCalc queries, etc.
-    first_name: Matthew
-    last_name:  Brett
-    api_key:    ab_etcetcetc
-    email: matthew.brett@gmail.com
+    # Account settings for CoCalc
+    first_name: Jane
+    last_name: Dunne
+    api_key: an_api_key
+    email: jane.dunne@yourmail.com
 """
 
 import json
@@ -48,7 +48,7 @@ class CCResponseError(CocalcError):
     """ Error for unexpected CoCalc response """
 
 
-class TimeoutError(CocalcError):
+class CCTimeoutError(CocalcError):
     """ Error for project timing out """
 
 
@@ -83,14 +83,23 @@ class CCAPI:
     def load_user_info(self, fname):
         r"""Load user information
 
-        Input file should be of form
+        Input file should be of form::
 
+            # Account settings for CoCalc
             first_name: Jane
-            last_name: Doe
-            api_key: sk_sda89swelekd8x0JJ83lGSwl
-            email: my_email@somehost.org
+            last_name: Dunne
+            api_key: an_api_key
+            email: jane.dunne@yourmail.com
 
-        returns dict of user info settings.
+        Parameters
+        ----------
+        fname : str
+            Path to configuration file in format above.
+
+        Returns
+        -------
+        cc_config : dict
+            Dict of user settings.
         """
         with open(fname,"r") as inf:
             user_info = yaml.load(inf)
@@ -98,6 +107,8 @@ class CCAPI:
 
     @property
     def account_id(self):
+        """ Return account UUID of user account
+        """
         if self._account_id is not None:
             return self._account_id
         payload = {"query": {"accounts": {"account_id":None}}}
@@ -176,7 +187,25 @@ class CCAPI:
         return [r['project_id'] for r in response['query'][q_str]]
 
     def touch_project(self, projectish):
-        # https://doc.cocalc.com/api/touch_project.html
+        '''Touch project
+
+        Quoting from the `touch project API doc
+        <https://doc.cocalc.com/api/touch_project.html>`_:
+
+            Mark this project as being actively used by the user sending this
+            message. This keeps the project from idle timing out, among other
+            things.
+
+        Parameters
+        ----------
+        projectish : str
+            Project title or UUID
+
+        Returns
+        -------
+        response : dict
+            Response from request.
+        '''
         project_id = self.as_project_id(projectish)
         rid = make_uuid()
         response = self.call_api('touch_project',
@@ -184,6 +213,27 @@ class CCAPI:
         return response['event']
 
     def start_project(self, projectish, wait=5, retries=10):
+        '''Start project
+
+        Tries to wake. project by sending a request to run the Unix ``date``
+        command.  Send request `retries` times, waiting `wait` second between
+        each try.  Raise ``CCTimeoutError`` if project still not responding.
+
+        Parameters
+        ----------
+        projectish : str
+            Project title or UUID
+        wait : int, optional
+            Number of seconds to wait between start requests.
+        retries : int, optional
+            Number of retries for start requests
+
+        Raises
+        ------
+        CCTimeoutError
+            If project fails to reply after `retries` attempts to contact
+            project, each `wait` seconds apart.
+        '''
         project_id = self.as_project_id(projectish)
         for i in range(retries):
             try:
@@ -193,14 +243,14 @@ class CCAPI:
                 continue
             break
         else:
-            raise TimeoutError(f'Could not wake {projectish}')
+            raise CCTimeoutError(f'Could not wake {projectish}')
         r = self.project_exec(project_id, 'date')
         assert r['exit_code'] == 0
 
     def create_project(self, title, description, start=False):
         """ Create project with `title` and `description`, return `project_id`
 
-        Return existing project_id if project with matching title already
+        Return existing project UUID if project with matching title already
         exists, but raise for more than one project.
 
         Parameters
@@ -244,8 +294,20 @@ class CCAPI:
 
     def search_users(self, user_str):
         """ Search for user with string `user_str`
+
+        See `user search API doc
+        <https://doc.cocalc.com/api/user_search.html>`_.
+
+        Parameters
+        ----------
+        user_str : str
+            String identifying user.  Can be user name or email address.
+
+        Returns
+        -------
+        account_ids : list
+            UUIDs of accounts found with `user_str` search.
         """
-        # https://doc.cocalc.com/api/user_search.html
         payload = {'query': user_str}
         response = self.call_api("user_search", payload)
         return [r['account_id'] for r in response['results']]
@@ -269,48 +331,75 @@ class CCAPI:
     def as_account_id(self, accountish):
         """ Return account_id for `accountish`
 
-        `accountish` can be a UUID, in which case we return it without further
-        ado; we assume it is in fact an account_id.  Otherwise we search for
-        the account, and return if we find it, raising suitable errors
-        otherwise.
+        Parameters
+        ----------
+        accountish : str
+            Can be a UUID, in which case we return it without further ado; we
+            assume it is in fact an account_id.  Otherwise we search for the
+            account identified by this str.
+
+        Returns
+        -------
+        account_id : str
+            UUID of account.
+
+        Raises
+        ------
+        CCNoneFoundError
+            No accounts matching `accountish`
+        CCManyFoundError
+            More than one account matching `accountish`
         """
         return self._check_id(accountish, 'user', self.search_users)
 
     def as_project_id(self, projectish):
         """ Return project_id for `projectish`
 
-        `projectish` can be a UUID, in which case we return it without further
-        ado; we assume it is in fact a project_id.  Otherwise we search for the
-        project, and return if we find it, raising suitable errors otherwise.
+        Parameters
+        ----------
+        projectish : str
+            Can be a UUID, in which case we return it without further ado; we
+            assume it is in fact a project_id.  Otherwise we search for the
+            project identified by this str.
+
+        Returns
+        -------
+        project_id : str
+            UUID of project.
+
+        Raises
+        ------
+        CCNoneFoundError
+            No projects matching `projectish`
+        CCManyFoundError
+            More than one project matching `projectish`
         """
         return self._check_id(projectish, 'project', self.projects_by_title)
 
-    def invite_collaborator(self,
-                            collaboratorish,
-                            projectish,
-                            subject,
-                            email_body,
-                            replyto=None,
-                            replyto_name=None,
-                           ):
-        """ Invite `collaborator` to project project `project_id`
-        """
-        # https://doc.cocalc.com/api/invite_collaborator.html
-        collaborator_id = self.as_account_id(collaboratorish)
-        project_id = self.as_project_id(projectish)
-        ui = self.uinfo
-        replyto = ui['email'] if replyto is None else replyto
-        replyto_name = (f"{ui['first_name']} {ui['last_name']}"
-                        if replyto_name is None else replyto_name)
-        payload = dict(account_id=collaborator_id,
-                       project_id=project_id,
-                       subject=subject,
-                       email=email_body,
-                       replyto=replyto,
-                       replyto_name=replyto_name)
-        return self.call_api('invite_collaborator', payload)
-
     def get_project_users(self, projectish):
+        ''' Get users for project identified by `projectish`
+
+        Parameters
+        ----------
+        projectish : str
+            Project UUID or string identifying project.
+
+        Returns
+        -------
+        owner : str
+            UUID of owner account.
+        collaborators : list
+            UUIDs of project users who are not collaborators.
+
+        Raises
+        ------
+        CCNoneFoundError
+            No projects matching `projectish`
+        CCManyFoundError
+            More than one project matching `projectish`
+        CCResponseError
+            If request to query project users fails.
+        '''
         project_id = self.as_project_id(projectish)
         payload = {"query": {"projects": {"project_id": project_id,
                                           "users": None}}}
@@ -328,6 +417,66 @@ class CCAPI:
                 raise ValueError(f'Unknown user type {group}')
         return owner, collaborators
 
+    def invite_collaborator(self,
+                            collaboratorish,
+                            projectish,
+                            subject,
+                            email_body,
+                            replyto=None,
+                            replyto_name=None,
+                           ):
+        """ Invite `collaboratorish` to project identified by `projectish`
+
+        See `invite collaborator API doc
+        <https://doc.cocalc.com/api/invite_collaborator.html>`_ for more
+        detail.
+
+        Parameters
+        ----------
+        collaboratorish : str
+            Account UUID or string identifying user.
+        projectish : str
+            Project UUID or string identifying project.
+        subject : str
+            Subject for invitation email.
+        email_body : str
+            Body of invitation email.
+        replyto : None or str, optional
+            "Reply to" email, or your configured account email if None.
+        replyto_name : None or str, optional
+            "Reply to" name, or your configured account name if None.
+
+        Returns
+        -------
+        response : dict
+            Response to request.
+
+        Raises
+        ------
+        CCNoneFoundError
+            No account matching `collaboratorish` or no projects matching
+            `projectish`
+        CCManyFoundError
+            More than one account matching `collaboratorish` or more than one
+            project matching `projectish`.
+        CCResponseError
+            If request to invite collaborator fails.
+        """
+        # https://doc.cocalc.com/api/invite_collaborator.html
+        collaborator_id = self.as_account_id(collaboratorish)
+        project_id = self.as_project_id(projectish)
+        ui = self.uinfo
+        replyto = ui['email'] if replyto is None else replyto
+        replyto_name = (f"{ui['first_name']} {ui['last_name']}"
+                        if replyto_name is None else replyto_name)
+        payload = dict(account_id=collaborator_id,
+                       project_id=project_id,
+                       subject=subject,
+                       email=email_body,
+                       replyto=replyto,
+                       replyto_name=replyto_name)
+        return self.call_api('invite_collaborator', payload)
+
     def invite_collaborators(self,
                              collaborators,
                              projectish,
@@ -337,6 +486,40 @@ class CCAPI:
                              replyto_name=None,
                             ):
         """ Invite `collaborators` not already on project `projectish`
+
+        See :method:`invite_collaborator`.
+
+        Parameters
+        ----------
+        collaborators : sequence
+            Sequence of strings, each giving account UUID or string identifying
+            user to invite.
+        projectish : str
+            Project UUID or string identifying project.
+        subject : str
+            Subject for invitation email.
+        email_body : str
+            Body of invitation email.
+        replyto : None or str, optional
+            "Reply to" email, or your configured account email if None.
+        replyto_name : None or str, optional
+            "Reply to" name, or your configured account name if None.
+
+        Returns
+        -------
+        response : dict
+            Response to request.
+
+        Raises
+        ------
+        CCNoneFoundError
+            No account matching one or more of `collaborators` or no projects matching
+            `projectish`
+        CCManyFoundError
+            More than one account matching onf or more of `collaborators` or
+            more than one project matching `projectish`.
+        CCResponseError
+            If request to invite collaborators fails.
         """
         project_id = self.as_project_id(projectish)
         collaborator_ids = [self.as_account_id(cid) for cid in collaborators]
@@ -351,7 +534,8 @@ class CCAPI:
                                          replyto_name=replyto_name,
                                         )
 
-    def project_exec(self, projectish,
+    def project_exec(self,
+                     projectish,
                      command,
                      args = (),
                      cwd='',
@@ -361,7 +545,40 @@ class CCAPI:
                     ):
         """ Execute command on project `projectish`
 
-        See: https://doc.cocalc.com/api/project_exec.html
+        See: `project exec API doc
+        <https://doc.cocalc.com/api/project_exec.html>`_
+
+        Parameters
+        ----------
+        projectish : str
+            Project UUID or string identifying project.
+        command : str
+            Command to execute on `projectish` virtual machine.
+        args : sequence, optional
+            Arguments to `command`
+        cwd : str, optional
+            Working directory in which to execute command.  Empty string
+            corresponds to home directory of project.
+        timeout : int, optional
+            Time in seconds to wait for response.
+        bash : {False, True}, optional
+        err_on_exit : {False, True}, optional
+
+        Returns
+        -------
+        response : dict
+            Response to request.
+
+        Raises
+        ------
+        CCNoneFoundError
+            No account matching `collaboratorish` or no projects matching
+            `projectish`.
+        CCManyFoundError
+            More than one account matching `collaboratorish` or more than one
+            project matching `projectish`.
+        CCResponseError
+            If request to invite collaborator fails.
         """
         payload = {'id': make_uuid(),
                    'project_id': self.as_project_id(projectish),
@@ -378,7 +595,35 @@ class CCAPI:
                 f'{command} failed on {projectish} with response\n{response}')
         return response
 
-    def text_file_to_project(self, projectish, path, content):
+    def write_text_file_to_project(self, projectish, path, content):
+        """ Write text file contents `contents` to `path` in `projectish`
+
+        See: `copy file API doc
+        <https://doc.cocalc.com/api/write_text_file_to_project.html>`_
+
+        Parameters
+        ----------
+        projectish : str
+            Project UUID or string identifying project.
+        path : str
+            Path in project files to which to write `content`.
+        content : str
+            Contents of file.
+
+        Returns
+        -------
+        response : dict
+            Response to request.
+
+        Raises
+        ------
+        CCNoneFoundError
+            No projects matching `projectish`.
+        CCManyFoundError
+            More than one project matching `projectish`.
+        CocalcError
+            If request to write file fails.
+        """
         payload = {'id': make_uuid(),
                    'project_id': self.as_project_id(projectish),
                    'path': path,
@@ -390,7 +635,7 @@ class CCAPI:
                 f'response\n{response}')
         return response
 
-    def project_upgrade(self,
+    def upgrade_project(self,
                         projectish,
                         accountish=None,
                         **kwargs):
@@ -399,10 +644,10 @@ class CCAPI:
         Parameters
         ----------
         projectish : str
-            Project ID UUID or project title.
+            Project UUID or project title.
         accountish : None or str, optional
-            Account ID UUID or email or name of account giving the upgrade.  If
-            None, assume account id from `self.uinfo`.
+            Account UUID or email or name of account giving the upgrade.  If
+            None, assume your configured account id.
         \*\*kwargs : dict
             Settings to change in upgrade (see Notes below).
 

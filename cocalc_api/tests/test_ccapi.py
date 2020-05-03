@@ -1,4 +1,4 @@
-""" Test for ccapi
+""" Tests for ccapi
 """
 
 import os.path as op
