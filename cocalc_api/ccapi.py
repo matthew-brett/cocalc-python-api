@@ -102,7 +102,7 @@ class CCAPI:
             Dict of user settings.
         """
         with open(fname,"r") as inf:
-            user_info = yaml.load(inf)
+            user_info = yaml.load(inf, Loader=yaml.SafeLoader)
         return user_info
 
     @property
